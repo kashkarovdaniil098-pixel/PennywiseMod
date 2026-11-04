@@ -1,6 +1,6 @@
 
-
 <Project Sdk="Microsoft.NET.Sdk">
+
   <PropertyGroup>
     <TargetFramework>net6.0</TargetFramework>
     <RootNamespace>PennywiseMod</RootNamespace>
@@ -12,7 +12,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="PennywiseNPC/assets/**/*"
+    <None Update="PennywiseNPC/assets/**/*"
           CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+
 </Project>
