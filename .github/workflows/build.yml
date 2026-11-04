@@ -12,17 +12,25 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-dotnet@v4
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '6.0.x'
 
-      - name: Build project
-        run: dotnet build PennywiseMod.csproj --configuration Release --verbosity normal
+      - name: Add Stardew reference assemblies
+        uses: Pathoschild/SMAPI-ModBuildWorkflow/add-reference-assemblies@v1
+        with:
+          repository: StardewModders/mod-reference-assemblies
+          ref: main
 
-      - name: Upload DLL
+      - name: Build mod
+        run: dotnet build PennywiseMod.csproj -c Release
+
+      - name: Upload mod
         uses: actions/upload-artifact@v4
         with:
           name: PennywiseMod
-          path: bin/Release/net6.0/PennywiseMod.dll
+          path: bin/Release/net6.0/
