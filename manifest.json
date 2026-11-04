@@ -1,0 +1,10 @@
+
+{
+  "Name": "Pennywise - The Watcher",
+  "Author": "PennywiseMod",
+  "Version": "1.0.0",
+  "Description": "A creepy clown that watches and follows the farmer.",
+  "UniqueID": "PennywiseMod.TheWatcher",
+  "EntryDll": "PennywiseMod.dll",
+  "MinimumApiVersion": "4.0.0"
+}
