@@ -4,26 +4,25 @@ name: Build Pennywise Mod
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches:
+      - main
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '6.0.x'
 
-      - name: Build
-        run: dotnet build PennywiseMod.csproj -c Release
+      - name: Build project
+        run: dotnet build PennywiseMod.csproj --configuration Release --verbosity normal
 
       - name: Upload DLL
         uses: actions/upload-artifact@v4
         with:
           name: PennywiseMod
-          path: bin/Release/net6.0/
+          path: bin/Release/net6.0/PennywiseMod.dll
