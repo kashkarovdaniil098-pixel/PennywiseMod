@@ -1,205 +1,365 @@
 
+using System;
+using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework.Graphics;
 using StardewModdingAPI;
 using StardewModdingAPI.Events;
 using StardewValley;
-using Microsoft.Xna.Framework;
-using Microsoft.Xna.Framework.Graphics;
-using System;
+using StardewValley.Pathfinding;
 
-namespace PennywiseMod
+namespace PennywiseJumpscare
 {
-    public class ModEntry : Mod
+    public sealed class ModEntry : Mod
     {
-        private Texture2D[] down = new Texture2D[4];
-        private Texture2D[] left = new Texture2D[4];
-        private Texture2D[] right = new Texture2D[4];
-        private Texture2D[] up = new Texture2D[4];
-
-        private Texture2D idle;
-        private Texture2D current;
-
-        private Vector2 position;
-        private Vector2 target;
-
-        private bool visible;
-        private bool watching;
-
-        private int spawnTimer;
-        private int moveTimer;
-        private int animationTimer;
-        private int watchTimer;
-        private int frame;
-
-        private int direction = 0;
-
         private readonly Random random = new Random();
+
+        private NPC? pennywise;
+        private Texture2D? balloonTexture;
+
+        private int appearanceTimer;
+        private int encounterTimer;
+        private int stalkingTimer;
+        private int attackCooldown;
+        private int pathTimer;
+
+        private int normalSpeed = -1;
+
+        private bool active;
+        private bool chasing;
 
         public override void Entry(IModHelper helper)
         {
-            string folder = "PennywiseNPC/assets/";
+            ResetAppearanceTimer();
 
-            for (int i = 0; i < 4; i++)
-            {
-                down[i] = helper.ModContent.Load<Texture2D>(
-                    folder + "Down" + (i + 1) + ".png");
-
-                left[i] = helper.ModContent.Load<Texture2D>(
-                    folder + "Left" + (i + 1) + ".png");
-
-                right[i] = helper.ModContent.Load<Texture2D>(
-                    folder + "right" + (i + 1) + ".png");
-
-                up[i] = helper.ModContent.Load<Texture2D>(
-                    folder + "up" + (i + 1) + ".png");
-            }
-
-            idle = helper.ModContent.Load<Texture2D>(
-                folder + "idie2.png");
-
-            current = idle;
-
-            helper.Events.GameLoop.UpdateTicked += OnUpdate;
+            helper.Events.GameLoop.UpdateTicked += OnUpdateTicked;
             helper.Events.Display.RenderedWorld += OnRenderedWorld;
+            helper.Events.GameLoop.ReturnedToTitle += OnReturnedToTitle;
 
-            Monitor.Log("Pennywise loaded!", LogLevel.Info);
+            Monitor.Log("Pennywise AI loaded.", LogLevel.Info);
         }
 
-        private void OnUpdate(object sender, UpdateTickedEventArgs e)
+        private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
         {
-            if (!Context.IsWorldReady)
+            if (!Context.IsWorldReady || Game1.eventUp ||
+                Game1.currentMinigame != null)
                 return;
 
-            spawnTimer++;
+            pennywise ??=
+                Game1.getCharacterFromName("Daniil.PennywiseNPC_Pennywise")
+                ?? Game1.getCharacterFromName("Pennywise");
 
-            if (!visible && spawnTimer >= 1800)
-            {
-                spawnTimer = 0;
-                visible = true;
-                watching = false;
-                moveTimer = 0;
-                animationTimer = 0;
-
-                position = Game1.player.Position +
-                    new Vector2(
-                        random.Next(-250, 251),
-                        random.Next(-250, 251));
-
-                ChooseTarget();
-            }
-
-            if (!visible)
+            if (pennywise == null)
                 return;
 
-            if (watching)
-            {
-                watchTimer++;
+            if (normalSpeed < 0)
+                normalSpeed = Math.Max(1, pennywise.speed);
 
-                if (watchTimer >= 240)
-                {
-                    watching = false;
-                    watchTimer = 0;
-                    ChooseTarget();
-                }
+            if (appearanceTimer > 0)
+                appearanceTimer--;
+
+            if (attackCooldown > 0)
+                attackCooldown--;
+
+            if (!active)
+            {
+                if (appearanceTimer <= 0)
+                    TryAppear();
 
                 return;
             }
 
-            moveTimer++;
-            animationTimer++;
+            if (pennywise.currentLocation != Game1.currentLocation)
+                return;
 
-            if (moveTimer >= 180)
+            encounterTimer--;
+
+            if (encounterTimer <= 0)
             {
-                moveTimer = 0;
-                ChooseTarget();
+                EndEncounter();
+                return;
             }
 
-            Vector2 directionVector = target - position;
+            float distance = Vector2.Distance(
+                pennywise.Tile,
+                Game1.player.Tile
+            );
 
-            if (directionVector.Length() > 5f)
+            // Наблюдение за игроком перед погоней.
+            if (!chasing)
             {
-                directionVector.Normalize();
+                pennywise.speed = normalSpeed;
+                stalkingTimer++;
 
-                position += directionVector * 1.2f;
-
-                if (Math.Abs(directionVector.X) >
-                    Math.Abs(directionVector.Y))
+                if (stalkingTimer >= 180)
                 {
-                    direction = directionVector.X < 0 ? 1 : 2;
-                }
-                else
-                {
-                    direction = directionVector.Y < 0 ? 3 : 0;
+                    chasing = true;
+                    pathTimer = 15;
                 }
 
-                if (animationTimer >= 8)
-                {
-                    animationTimer = 0;
-                    frame = (frame + 1) % 4;
-                }
-
-                SetCurrentFrame();
-            }
-            else
-            {
-                watching = true;
-                watchTimer = 0;
-                current = idle;
+                return;
             }
 
-            if (Vector2.Distance(
-                Game1.player.Position, position) < 64)
+            // Атака на расстоянии 1,5 клетки.
+            if (distance <= 1.5f)
             {
-                visible = false;
-                spawnTimer = 0;
-                watching = false;
+                pennywise.controller = null;
+                pennywise.Halt();
+
+                if (attackCooldown <= 0)
+                {
+                    Game1.player.takeDamage(10, true, null);
+                    attackCooldown = 120;
+                }
+
+                return;
+            }
+
+            // Перестраивание маршрута.
+            if (++pathTimer >= 15)
+            {
+                pathTimer = 0;
+                FollowPlayer();
             }
         }
 
-        private void SetCurrentFrame()
+        private void TryAppear()
         {
-            switch (direction)
+            GameLocation location = Game1.currentLocation;
+            Vector2 playerTile = Game1.player.Tile;
+
+            Vector2? coveredPosition = null;
+            Vector2? fallbackPosition = null;
+
+            for (int i = 0; i < 80; i++)
             {
-                case 0:
-                    current = down[frame];
-                    break;
+                int dx = random.Next(-8, 9);
+                int dy = random.Next(-8, 9);
 
-                case 1:
-                    current = left[frame];
-                    break;
+                if (Math.Abs(dx) + Math.Abs(dy) < 4)
+                    continue;
 
-                case 2:
-                    current = right[frame];
-                    break;
+                Vector2 tile = playerTile + new Vector2(dx, dy);
 
-                case 3:
-                    current = up[frame];
+                if (!location.isTileOnMap(tile))
+                    continue;
+
+                if (location.isTileOccupiedBy(tile))
+                    continue;
+
+                if (fallbackPosition == null)
+                    fallbackPosition = tile;
+
+                if (HasNearbyCover(location, tile))
+                {
+                    coveredPosition = tile;
                     break;
+                }
             }
+
+            Vector2? spawn = coveredPosition ?? fallbackPosition;
+
+            if (spawn == null)
+            {
+                ResetAppearanceTimer();
+                return;
+            }
+
+            pennywise!.controller = null;
+            pennywise.currentLocation?.characters.Remove(pennywise);
+            pennywise.currentLocation = location;
+            pennywise.setTileLocation(spawn.Value);
+            location.addCharacter(pennywise);
+
+            pennywise.speed = normalSpeed;
+
+            active = true;
+            chasing = false;
+
+            stalkingTimer = 0;
+            encounterTimer = 60 * 35;
+            pathTimer = 0;
+
+            Monitor.Log("Pennywise appeared.", LogLevel.Info);
         }
 
-        private void ChooseTarget()
+        private bool HasNearbyCover(GameLocation location, Vector2 tile)
         {
-            Vector2 player = Game1.player.Position;
+            Vector2[] nearby =
+            {
+                tile + new Vector2(1, 0),
+                tile + new Vector2(-1, 0),
+                tile + new Vector2(0, 1),
+                tile + new Vector2(0, -1)
+            };
 
-            target = player + new Vector2(
-                random.Next(-250, 251),
-                random.Next(-250, 251));
+            foreach (Vector2 check in nearby)
+            {
+                if (location.terrainFeatures.ContainsKey(check) ||
+                    location.objects.ContainsKey(check))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private void FollowPlayer()
+        {
+            if (pennywise == null)
+                return;
+
+            GameLocation location = Game1.currentLocation;
+            Vector2 playerTile = Game1.player.Tile;
+
+            Point playerPoint = new Point(
+                (int)playerTile.X,
+                (int)playerTile.Y
+            );
+
+            Point[] offsets =
+            {
+                new Point(1, 0),
+                new Point(-1, 0),
+                new Point(0, 1),
+                new Point(0, -1),
+                new Point(1, 1),
+                new Point(-1, 1),
+                new Point(1, -1),
+                new Point(-1, -1)
+            };
+
+            foreach (Point offset in offsets)
+            {
+                Point destination = new Point(
+                    playerPoint.X + offset.X,
+                    playerPoint.Y + offset.Y
+                );
+
+                Vector2 tile = new Vector2(
+                    destination.X,
+                    destination.Y
+                );
+
+                if (!location.isTileOnMap(tile))
+                    continue;
+
+                if (location.isTileOccupiedBy(tile))
+                    continue;
+
+                pennywise.speed = Math.Max(
+                    1,
+                    (int)Math.Ceiling(normalSpeed * 1.2)
+                );
+
+                pennywise.controller = new PathFindController(
+                    pennywise,
+                    location,
+                    destination,
+                    -1
+                );
+
+                return;
+            }
         }
 
         private void OnRenderedWorld(
-            object sender,
+            object? sender,
             RenderedWorldEventArgs e)
         {
-            if (!visible || !Context.IsWorldReady)
+            if (!active || pennywise == null ||
+                pennywise.currentLocation != Game1.currentLocation)
                 return;
 
-            Vector2 screen = Game1.GlobalToLocal(
-                Game1.viewport, position);
+            balloonTexture ??= CreateBalloonTexture();
+
+            Vector2 position = Game1.GlobalToLocal(
+                Game1.viewport,
+                pennywise.Position + new Vector2(38, 8)
+            );
 
             e.SpriteBatch.Draw(
-                current,
-                screen,
-                Color.White);
+                balloonTexture,
+                position,
+                Color.White
+            );
+
+            // Нить шарика.
+            e.SpriteBatch.Draw(
+                Game1.staminaRect,
+                new Rectangle(
+                    (int)position.X + 7,
+                    (int)position.Y + 15,
+                    1,
+                    12
+                ),
+                Color.White
+            );
+        }
+
+        private Texture2D CreateBalloonTexture()
+        {
+            Texture2D texture = new Texture2D(
+                Game1.graphics.GraphicsDevice,
+                16,
+                22
+            );
+
+            Color[] pixels = new Color[16 * 22];
+
+            for (int y = 0; y < 22; y++)
+            {
+                for (int x = 0; x < 16; x++)
+                {
+                    float dx = (x - 8f) / 7f;
+                    float dy = (y - 8f) / 9f;
+
+                    pixels[y * 16 + x] =
+                        dx * dx + dy * dy <= 1f
+                        ? Color.Red
+                        : Color.Transparent;
+                }
+            }
+
+            texture.SetData(pixels);
+            return texture;
+        }
+
+        private void EndEncounter()
+        {
+            if (pennywise != null)
+            {
+                pennywise.controller = null;
+
+                if (normalSpeed > 0)
+                    pennywise.speed = normalSpeed;
+            }
+
+            active = false;
+            chasing = false;
+
+            ResetAppearanceTimer();
+        }
+
+        private void ResetAppearanceTimer()
+        {
+            appearanceTimer = random.Next(
+                60 * 60,
+                60 * 60 * 3
+            );
+        }
+
+        private void OnReturnedToTitle(
+            object? sender,
+            ReturnedToTitleEventArgs e)
+        {
+            active = false;
+            chasing = false;
+            pennywise = null;
+            normalSpeed = -1;
+
+            balloonTexture?.Dispose();
+            balloonTexture = null;
+
+            ResetAppearanceTimer();
         }
     }
 }
